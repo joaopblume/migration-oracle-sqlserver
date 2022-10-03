@@ -1,8 +1,14 @@
+import re
 from config_oracle import *
 from config_sqlserver import *
 import cx_Oracle
 import pyodbc
 from datetime import datetime
+from db_classes import Oracle, SqlServer
+
+
+
+        
 
 
 def create_table_sqlserver(connection, table_name, columns_list):
@@ -21,11 +27,12 @@ def connect_oracle():
 def get_table_info(oracle_connection, table_name):
     oracle_cursor = oracle_connection.cursor()
     columns_oracle = oracle_cursor.execute(f"SELECT column_name, data_type, data_length from USER_TAB_COLUMNS WHERE table_name = '{table_name}'").fetchall()
-    columns_sqlserver = oracle_cursor.execute(f"SELECT column_name, CASE data_type WHEN NCLOB THEN 'NVARCHAR2(max)' WHEN CLOB THEN 'VARCHAR(max)' WHEN 'LONG' THEN 'INT' WHEN 'VARCHAR2' THEN 'VARCHAR' WHEN 'NUMBER' THEN 'INT' ELSE data_type END data_type, data_length from USER_TAB_COLUMNS where table_name = '{table_name.upper()}'").fetchall()
+    columns_sqlserver = oracle_cursor.execute(f"SELECT column_name, CASE data_type WHEN 'NCLOB' THEN 'NVARCHAR2(max)' WHEN 'CLOB' THEN 'VARCHAR(max)' WHEN 'LONG' THEN 'INT' WHEN 'VARCHAR2' THEN 'VARCHAR' WHEN 'NUMBER' THEN 'INT' ELSE data_type END data_type, data_length from USER_TAB_COLUMNS where table_name = '{table_name.upper()}'").fetchall()
     return columns_oracle, columns_sqlserver
 
 def catch_pk(table_name, connection):
     oracle_cursor = connection.cursor()
+    print(f"SELECT acc.column_name FROM all_constraints ac, all_cons_columns acc WHERE ac.table_name = '{table_name}' AND ac.table_name = acc.table_name AND ac.constraint_type = 'P' AND ac.constraint_name = acc.constraint_name")
     pk = oracle_cursor.execute(f"SELECT acc.column_name FROM all_constraints ac, all_cons_columns acc WHERE ac.table_name = '{table_name}' AND ac.table_name = acc.table_name AND ac.constraint_type = 'P' AND ac.constraint_name = acc.constraint_name").fetchall()
     return pk[0][0]
 
@@ -40,7 +47,7 @@ def select_statement(hash_changes, column_name, table_name, oracle_connection, p
     formatted_columns = ", ".join([x for x in column_name])
 
     select = f"SELECT {formatted_columns}, CAST (standard_hash (({hash_changes}), 'SHA256') AS VARCHAR(256)) HASH"
-    delete = f"SELECT b.referencia as {formatted_columns}, b.HASH as HASH, 'D' operacao FROM OSRV_HASH_{table_name} b left join {table_name} a ON (b.referencia = a.{pk}) WHERE a.{pk} is null"
+    delete = f"SELECT b.referencia as {formatted_columns}, b.HASH as HASH, 'D' operacao FROM OSRV_HASH_{table_name} b left join {table_name} a ON (b.referencia = a.{pk})WHERE b.operacao <> 'D' and a.{pk} is null"
 
     insert = f", 'I' operacao "
     update = f", 'U' operacao "
@@ -59,6 +66,7 @@ def select_statement(hash_changes, column_name, table_name, oracle_connection, p
     finally:
         formatted_columns = ", ".join([x for x in column_name])
         query = (f"{select}{insert}{from_}{where_insert} union all {select}{update}{from_}{where_update} union all {delete}")
+        print(query)
         select = cursor.execute(query).fetchall()
         return select
 
@@ -66,9 +74,11 @@ def insert_into_hash_table(hashes, oracle_connection, table_name):
     oracle_cursor = oracle_connection.cursor()
     print("Inserindo registros na tabela de hashes")
     for line in hashes:
+        print(f"INSERT INTO OSRV_HASH_{table_name} values ('{line[0]}', '{line[-1]}', '{line[-2]}')")
         oracle_cursor.execute(f"INSERT INTO OSRV_HASH_{table_name} values ('{line[0]}', '{line[-1]}', '{line[-2]}')")
-    hashes = oracle_cursor.execute(f"SELECT * FROM OSRV_HASH_{table_name}").fetchall()
+        print('INSERIDO')
     oracle_cursor.execute("commit")
+    print()
 
 
 def connect_sqlserver():
@@ -124,9 +134,21 @@ def create_hash_table(oracle_connection, table_name, pk, columns):
 table = input('Digite o nome da tabela a ser inserida: ').upper()
 oracle_conn = connect_oracle()
 sqlserver_conn = connect_sqlserver()
-columns_oracle, columns_sqlserver = get_table_info(oracle_conn, table)
-pk = catch_pk(table, oracle_conn)
-hash_changes, column_names = create_hashes(columns_oracle)
-insert = select_statement(hash_changes, column_names, table, oracle_conn, pk)
-insert_into_hash_table(insert, oracle_conn, table)
-insert_into_sqlserver(insert, table, sqlserver_conn, columns_sqlserver)
+#columns_oracle, columns_sqlserver = get_table_info(oracle_conn, table)
+#pk = catch_pk(table, oracle_conn)
+#hash_changes, column_names = create_hashes(columns_oracle)
+#insert = select_statement(hash_changes, column_names, table, oracle_conn, pk)
+#insert_into_hash_table(insert, oracle_conn, table)
+#insert_into_sqlserver(insert, table, sqlserver_conn, columns_sqlserver)
+
+#sqlserver = SqlServer(table, sqlserver_conn, columns_oracle, pk, insert)
+#sqlserver.create_table()
+#sqlserver.insert_into()
+
+
+oracle = Oracle(table, oracle_conn)
+oracle.get_pk()
+oracle.create_hash_table()
+oracle.get_columns()
+oracle.compare_to_hash_table()
+oracle.insert_into_hash_table()
